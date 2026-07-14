@@ -38,13 +38,17 @@
   style.textContent = `
     .ytc-dimmed { position: relative; }
     .ytc-dimmed > :not(.ytc-badge) { opacity: 0.12; filter: grayscale(1); transition: opacity 0.15s; }
+    .ytc-dimmed.ytc-peek > :not(.ytc-badge),
+    .ytc-dimmed:hover > :not(.ytc-badge),
     .ytc-dimmed.ytc-revealed > :not(.ytc-badge) { opacity: 1; filter: none; }
+    .ytc-dimmed.ytc-peek:not(.ytc-revealed) > :not(.ytc-badge),
+    .ytc-dimmed:hover:not(.ytc-revealed) > :not(.ytc-badge) { filter: grayscale(0.7); }
     .ytc-badge {
       position: absolute; top: 6px; left: 6px; z-index: 100;
       background: #dc2626; color: #fff; font: 500 11px/1 Roboto, Arial, sans-serif;
       padding: 4px 8px; border-radius: 999px; cursor: pointer; user-select: none;
     }
-    .ytc-dimmed.ytc-revealed .ytc-badge { opacity: 0.6; }
+    .ytc-dimmed.ytc-revealed .ytc-badge { opacity: 0.7; }
   `;
   document.documentElement.appendChild(style);
 
@@ -121,6 +125,35 @@
   function applyAll() {
     document.querySelectorAll('[data-ytc-id]').forEach(applyVerdict);
   }
+
+  // CSS :hover alone isn't enough to reveal a dimmed card: hovering the
+  // thumbnail spawns YouTube's inline video preview, a floating overlay
+  // OUTSIDE the card, so :hover drops and the title/channel stay dimmed.
+  // Track the hovered card ourselves and keep it revealed while the pointer
+  // is over that preview overlay.
+  let peeked = null;
+
+  function setPeek(el) {
+    if (peeked === el) return;
+    peeked?.classList.remove('ytc-peek');
+    peeked = el;
+    peeked?.classList.add('ytc-peek');
+  }
+
+  document.addEventListener(
+    'pointerover',
+    (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return;
+      const card = target.closest('.ytc-dimmed');
+      if (card) {
+        setPeek(card);
+      } else if (!(peeked && target.closest('ytd-video-preview, #video-preview'))) {
+        setPeek(null);
+      }
+    },
+    true
+  );
 
   /* ---- classification dispatch ---- */
 
