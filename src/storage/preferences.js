@@ -9,12 +9,54 @@ import { clearAllVideos, clearClassifications } from '../db/database.js';
 
 const PREFS_KEY = 'ytc.preferences';
 
+// Heuristic slop-filter tuning (thresholds + per-tier weights). Defaults must
+// mirror public/content/slop-filters.js; the content script deep-merges, so
+// missing keys on old stored data fall back to its config.
+export const DEFAULT_SLOP_PREFS = {
+  hideThreshold: 10,
+  dimThreshold: 6,
+  weights: {
+    tier1: 10,
+    tier2: 6,
+    structural: 4,
+    topicMultiplier: 1,
+    channelMultiplier: 1,
+  },
+  debug: false,
+};
+
 export const DEFAULT_PREFERENCES = {
   trustedChannels: [],
   blacklistKeywords: [],
   sensitivity: 50,
   filteringEnabled: true,
+  slop: DEFAULT_SLOP_PREFS,
 };
+
+function clampNumber(value, fallback, min = 0, max = 100) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, value))
+    : fallback;
+}
+
+/** Deep-merge + clamp a (possibly partial/foreign) slop prefs object. */
+export function sanitizeSlopPrefs(raw) {
+  const slop = typeof raw === 'object' && raw !== null ? raw : {};
+  const weights = typeof slop.weights === 'object' && slop.weights !== null ? slop.weights : {};
+  const d = DEFAULT_SLOP_PREFS;
+  return {
+    hideThreshold: clampNumber(slop.hideThreshold, d.hideThreshold, 1),
+    dimThreshold: clampNumber(slop.dimThreshold, d.dimThreshold, 1),
+    weights: {
+      tier1: clampNumber(weights.tier1, d.weights.tier1),
+      tier2: clampNumber(weights.tier2, d.weights.tier2),
+      structural: clampNumber(weights.structural, d.weights.structural),
+      topicMultiplier: clampNumber(weights.topicMultiplier, d.weights.topicMultiplier, 0, 10),
+      channelMultiplier: clampNumber(weights.channelMultiplier, d.weights.channelMultiplier, 0, 10),
+    },
+    debug: typeof slop.debug === 'boolean' ? slop.debug : d.debug,
+  };
+}
 
 function mirrorToExtensionStorage(prefs) {
   try {
@@ -29,7 +71,8 @@ export function loadPreferences() {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return { ...DEFAULT_PREFERENCES };
     // Merge so newly added preference keys get defaults on old data.
-    const prefs = { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    const prefs = { ...DEFAULT_PREFERENCES, ...parsed, slop: sanitizeSlopPrefs(parsed.slop) };
     mirrorToExtensionStorage(prefs);
     return prefs;
   } catch {
@@ -68,6 +111,7 @@ export function importPreferencesJSON(json) {
       typeof parsed.filteringEnabled === 'boolean'
         ? parsed.filteringEnabled
         : DEFAULT_PREFERENCES.filteringEnabled,
+    slop: sanitizeSlopPrefs(parsed.slop),
   };
   return savePreferences(prefs);
 }

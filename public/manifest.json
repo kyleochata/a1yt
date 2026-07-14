@@ -20,7 +20,12 @@
     },
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["content/classifier.js"],
+      "js": [
+        "content/slop-filters.js",
+        "content/slop-score.js",
+        "content/slop-channel.js",
+        "content/classifier.js"
+      ],
       "run_at": "document_idle"
     }
   ]

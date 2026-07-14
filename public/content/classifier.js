@@ -1,13 +1,25 @@
 // Content script (isolated world) for YouTube feed/search/related pages.
-// Scrapes title + channel from video renderers, asks the service worker to
-// classify each one (background.js owns the Ollama call and the cache), and
-// dims videos judged "slop" above the user's sensitivity threshold.
+//
+// Two filtering layers, cheap first:
+//   1. Heuristic slop score (slop-filters.js config + slop-score.js matcher,
+//      tier-4 channel stats via slop-channel.js). Score >= hideThreshold
+//      collapses the video to a placeholder; >= dimThreshold dims it.
+//   2. Videos below the dim band fall through to the existing LLM pipeline:
+//      background.js owns the Ollama call and the cache, and verdicts dim
+//      based on the sensitivity preference.
+//
+// Trusted channels and the ytc.allowlist are never hidden or dimmed by
+// either layer.
 //
 // YouTube's markup is undocumented and changes; extraction is defensive with
 // several selector fallbacks, and anything that can't be parsed is skipped.
 
 (() => {
   if (typeof chrome === 'undefined' || !chrome.runtime?.id) return;
+
+  const SLOP_CONFIG = self.YTC_SLOP_CONFIG;
+  const SLOP = self.YTC_SLOP_SCORE;
+  const CHANNEL = self.YTC_SLOP_CHANNEL;
 
   const CONTAINER_SELECTOR = [
     'ytd-rich-item-renderer',
@@ -18,19 +30,48 @@
   ].join(', ');
 
   const MAX_INFLIGHT = 4; // background serializes LLM calls; this just bounds open channels
+  const ALLOWLIST_KEY = 'ytc.allowlist';
+
+  const DEFAULT_SLOP_PREFS = {
+    hideThreshold: SLOP_CONFIG.thresholds.hide,
+    dimThreshold: SLOP_CONFIG.thresholds.dim,
+    weights: {
+      tier1: SLOP_CONFIG.tier1.weight,
+      tier2: SLOP_CONFIG.tier2.weight,
+      structural: SLOP_CONFIG.structural.weight,
+      topicMultiplier: 1,
+      channelMultiplier: 1,
+    },
+    debug: false,
+  };
 
   const DEFAULT_PREFERENCES = {
     trustedChannels: [],
     blacklistKeywords: [],
     sensitivity: 50,
     filteringEnabled: true,
+    slop: DEFAULT_SLOP_PREFS,
   };
 
   let prefs = { ...DEFAULT_PREFERENCES };
-  const results = new Map(); // videoId -> {verdict, confidence, reason, source}
+  let allowlist = []; // lowercased channel names, user-managed via placeholder button
+  const results = new Map(); // videoId -> {verdict, confidence, reason, source} (LLM layer)
   const failed = new Set(); // videoIds that errored (Ollama down etc.) — retried on navigation
   const pending = new Set(); // videoIds with an in-flight request
   const queue = []; // videos waiting for a free slot
+  const titleScores = new Map(); // videoId -> {score, signals}
+  const channelScores = new Map(); // channelPath -> {score, signals} | 'pending'
+  const revealed = new Set(); // videoIds un-hidden via "show anyway"
+
+  function mergePrefs(stored) {
+    const merged = { ...DEFAULT_PREFERENCES, ...(stored ?? {}) };
+    merged.slop = {
+      ...DEFAULT_SLOP_PREFS,
+      ...(stored?.slop ?? {}),
+      weights: { ...DEFAULT_SLOP_PREFS.weights, ...(stored?.slop?.weights ?? {}) },
+    };
+    return merged;
+  }
 
   /* ---- styles ---- */
 
@@ -49,6 +90,17 @@
       padding: 4px 8px; border-radius: 999px; cursor: pointer; user-select: none;
     }
     .ytc-dimmed.ytc-revealed .ytc-badge { opacity: 0.7; }
+    .ytc-hidden > :not(.ytc-placeholder) { display: none !important; }
+    .ytc-placeholder {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      margin: 4px 0; padding: 8px 12px; border: 1px dashed rgba(128, 128, 128, 0.5);
+      border-radius: 8px; font: 12px/1.4 Roboto, Arial, sans-serif;
+      color: var(--yt-spec-text-secondary, #909090);
+    }
+    .ytc-placeholder button {
+      background: none; border: none; padding: 0; cursor: pointer;
+      font: inherit; color: var(--yt-spec-call-to-action, #3ea6ff);
+    }
   `;
   document.documentElement.appendChild(style);
 
@@ -76,6 +128,11 @@
     ).trim();
     if (!title) return null;
 
+    const channelLink =
+      el.querySelector('ytd-channel-name a[href]') ??
+      el.querySelector('a[href^="/@"], a[href^="/channel/"], a[href^="/c/"], a[href^="/user/"]');
+    const channelPath = (channelLink?.getAttribute('href') ?? '').split('?')[0] || null;
+
     const channel = (
       el.querySelector('ytd-channel-name #text')?.textContent ??
       el.querySelector('ytd-channel-name a')?.textContent ??
@@ -84,7 +141,49 @@
       ''
     ).trim();
 
-    return { id, title, channel };
+    return { id, title, channel, channelPath };
+  }
+
+  /* ---- heuristic scoring ---- */
+
+  function debugLog(label, video, result) {
+    if (!prefs.slop.debug || result.signals.length === 0) return;
+    console.debug(
+      `[ytc] ${label} score ${result.score} — "${video.title}" (${video.channel || 'unknown channel'})`,
+      result.signals
+    );
+  }
+
+  function scoreVideo(video) {
+    if (!titleScores.has(video.id)) {
+      const result = SLOP.scoreTitle(video.title, SLOP_CONFIG, prefs.slop.weights);
+      titleScores.set(video.id, result);
+      debugLog('title', video, result);
+    }
+    if (video.channelPath && !channelScores.has(video.channelPath)) {
+      channelScores.set(video.channelPath, 'pending');
+      CHANNEL.getChannelStats(video.channelPath, SLOP_CONFIG).then((stats) => {
+        const result = SLOP.scoreChannelStats(stats, SLOP_CONFIG, prefs.slop.weights);
+        channelScores.set(video.channelPath, result);
+        debugLog('channel', video, result);
+        applyAll();
+      });
+    }
+  }
+
+  function slopScore(el) {
+    const title = titleScores.get(el.dataset.ytcId);
+    const channel = channelScores.get(el.dataset.ytcChannelPath);
+    return (title?.score ?? 0) + (typeof channel === 'object' && channel ? channel.score : 0);
+  }
+
+  function isAllowed(channelName) {
+    const name = (channelName ?? '').trim().toLowerCase();
+    if (!name) return false;
+    return (
+      allowlist.includes(name) ||
+      prefs.trustedChannels.some((c) => c.trim().toLowerCase() === name)
+    );
   }
 
   /* ---- verdict application ---- */
@@ -94,32 +193,114 @@
     return 1 - prefs.sensitivity / 100;
   }
 
-  function applyVerdict(el) {
-    const result = results.get(el.dataset.ytcId);
-    const shouldDim =
-      prefs.filteringEnabled &&
-      result?.verdict === 'slop' &&
-      result.confidence >= slopThreshold();
+  function clearMarks(el) {
+    el.classList.remove('ytc-dimmed', 'ytc-revealed', 'ytc-hidden');
+    el.querySelector(':scope > .ytc-badge')?.remove();
+    el.querySelector(':scope > .ytc-placeholder')?.remove();
+  }
 
-    if (!shouldDim) {
-      el.classList.remove('ytc-dimmed', 'ytc-revealed');
-      el.querySelector(':scope > .ytc-badge')?.remove();
+  function renderHidden(el, score) {
+    el.classList.add('ytc-hidden');
+    el.classList.remove('ytc-dimmed', 'ytc-revealed');
+    el.querySelector(':scope > .ytc-badge')?.remove();
+    if (el.querySelector(':scope > .ytc-placeholder')) return;
+
+    const box = document.createElement('div');
+    box.className = 'ytc-placeholder';
+
+    const label = document.createElement('span');
+    label.textContent = `Hidden · slop score ${score}`;
+    box.appendChild(label);
+
+    const show = document.createElement('button');
+    show.textContent = 'Show anyway';
+    show.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      revealed.add(el.dataset.ytcId);
+      applyVerdict(el); // score >= hide implies >= dim, so this lands in the dimmed state…
+      el.classList.add('ytc-revealed'); // …which "show anyway" starts out revealed
+    });
+    box.appendChild(show);
+
+    const channelName = (el.dataset.ytcChannel ?? '').trim();
+    if (channelName) {
+      const allow = document.createElement('button');
+      allow.textContent = 'Allowlist channel';
+      allow.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const next = [...new Set([...allowlist, channelName.toLowerCase()])];
+        chrome.storage.local.set({ [ALLOWLIST_KEY]: next }); // onChanged re-applies
+      });
+      box.appendChild(allow);
+    }
+
+    el.appendChild(box);
+  }
+
+  function renderDimmed(el, badgeText, badgeTitle) {
+    el.classList.add('ytc-dimmed');
+    el.classList.remove('ytc-hidden');
+    el.querySelector(':scope > .ytc-placeholder')?.remove();
+    const existing = el.querySelector(':scope > .ytc-badge');
+    if (existing) {
+      existing.textContent = badgeText;
+      existing.title = badgeTitle;
+      return;
+    }
+    const badge = document.createElement('div');
+    badge.className = 'ytc-badge';
+    badge.textContent = badgeText;
+    badge.title = badgeTitle;
+    badge.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      el.classList.toggle('ytc-revealed');
+    });
+    el.appendChild(badge);
+  }
+
+  function applyVerdict(el) {
+    const id = el.dataset.ytcId;
+    if (!prefs.filteringEnabled || isAllowed(el.dataset.ytcChannel)) {
+      clearMarks(el);
       return;
     }
 
-    el.classList.add('ytc-dimmed');
-    if (!el.querySelector(':scope > .ytc-badge')) {
-      const badge = document.createElement('div');
-      badge.className = 'ytc-badge';
-      badge.textContent = `slop · ${Math.round(result.confidence * 100)}%`;
-      badge.title = `${result.reason || 'Flagged by filter'} (click to toggle)`;
-      badge.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        el.classList.toggle('ytc-revealed');
-      });
-      el.appendChild(badge);
+    // Layer 1: heuristic slop score.
+    const score = slopScore(el);
+    if (score >= prefs.slop.hideThreshold && !revealed.has(id)) {
+      renderHidden(el, score);
+      return;
     }
+    if (score >= prefs.slop.dimThreshold) {
+      const signals = [
+        ...(titleScores.get(id)?.signals ?? []),
+        ...((typeof channelScores.get(el.dataset.ytcChannelPath) === 'object' &&
+          channelScores.get(el.dataset.ytcChannelPath)?.signals) ||
+          []),
+      ];
+      renderDimmed(
+        el,
+        `slop score ${score}`,
+        `${signals.map((s) => s.name).join(', ') || 'Heuristic filter'} (click to toggle)`
+      );
+      return;
+    }
+
+    // Layer 2: LLM verdict.
+    const result = results.get(id);
+    if (result?.verdict === 'slop' && result.confidence >= slopThreshold()) {
+      renderDimmed(
+        el,
+        `slop · ${Math.round(result.confidence * 100)}%`,
+        `${result.reason || 'Flagged by filter'} (click to toggle)`
+      );
+      return;
+    }
+
+    clearMarks(el);
   }
 
   function applyAll() {
@@ -199,12 +380,23 @@
       // element's video can change; re-tag instead of skipping seen elements.
       if (el.dataset.ytcId !== video.id) {
         el.dataset.ytcId = video.id;
-        el.classList.remove('ytc-dimmed', 'ytc-revealed');
-        el.querySelector(':scope > .ytc-badge')?.remove();
+        clearMarks(el);
       }
-      if (results.has(video.id)) {
-        applyVerdict(el);
-      } else if (!pending.has(video.id) && !failed.has(video.id)) {
+      el.dataset.ytcChannel = video.channel;
+      if (video.channelPath) el.dataset.ytcChannelPath = video.channelPath;
+      else delete el.dataset.ytcChannelPath;
+
+      scoreVideo(video);
+      applyVerdict(el);
+
+      // Only spend an LLM call on videos the heuristics didn't already flag.
+      if (
+        slopScore(el) < prefs.slop.dimThreshold &&
+        !results.has(video.id) &&
+        !pending.has(video.id) &&
+        !failed.has(video.id) &&
+        !isAllowed(video.channel)
+      ) {
         if (!queue.some((q) => q.video.id === video.id)) queue.push({ video, el });
       }
     });
@@ -219,16 +411,25 @@
 
   /* ---- wiring ---- */
 
-  chrome.storage.local.get('ytc.preferences', (stored) => {
-    prefs = { ...DEFAULT_PREFERENCES, ...(stored?.['ytc.preferences'] ?? {}) };
+  chrome.storage.local.get(['ytc.preferences', ALLOWLIST_KEY], (stored) => {
+    prefs = mergePrefs(stored?.['ytc.preferences']);
+    allowlist = stored?.[ALLOWLIST_KEY] ?? [];
     if (prefs.filteringEnabled) scan();
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || !changes['ytc.preferences']) return;
-    prefs = { ...DEFAULT_PREFERENCES, ...(changes['ytc.preferences'].newValue ?? {}) };
-    applyAll(); // re-evaluate threshold/enabled without reclassifying
-    if (prefs.filteringEnabled) scheduleScan();
+    if (area !== 'local') return;
+    if (changes[ALLOWLIST_KEY]) {
+      allowlist = changes[ALLOWLIST_KEY].newValue ?? [];
+      applyAll();
+    }
+    if (changes['ytc.preferences']) {
+      prefs = mergePrefs(changes['ytc.preferences'].newValue);
+      titleScores.clear(); // weights may have changed; rescore on next scan
+      channelScores.clear(); // stats stay cached in storage; only rescored
+      applyAll(); // re-evaluate thresholds/enabled without reclassifying
+      if (prefs.filteringEnabled) scheduleScan();
+    }
   });
 
   new MutationObserver(scheduleScan).observe(document.documentElement, {
