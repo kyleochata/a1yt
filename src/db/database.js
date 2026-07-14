@@ -2,9 +2,13 @@
 // All functions return Promises. Video shape:
 // { id, url, title, channel, tags: string[], savedAt: ISO string, notes }
 
+// Keep names, version, and upgrade logic in sync with public/background.js —
+// the service worker opens the same database and either context may run the
+// upgrade.
 const DB_NAME = 'yt-curator';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const VIDEO_STORE = 'videos';
+const CLASSIFICATION_STORE = 'classifications';
 
 let dbPromise = null;
 
@@ -15,13 +19,18 @@ export function openDB() {
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
-      // Future modules (filtering engine, analytics) add their own stores
-      // here under a bumped DB_VERSION.
+      // Future modules (discovery, analytics) add their own stores here
+      // under a bumped DB_VERSION.
       if (!db.objectStoreNames.contains(VIDEO_STORE)) {
         const store = db.createObjectStore(VIDEO_STORE, { keyPath: 'id' });
         store.createIndex('channel', 'channel', { unique: false });
         store.createIndex('savedAt', 'savedAt', { unique: false });
         store.createIndex('tags', 'tags', { unique: false, multiEntry: true });
+      }
+      if (!db.objectStoreNames.contains(CLASSIFICATION_STORE)) {
+        const store = db.createObjectStore(CLASSIFICATION_STORE, { keyPath: 'videoId' });
+        store.createIndex('verdict', 'verdict', { unique: false });
+        store.createIndex('classifiedAt', 'classifiedAt', { unique: false });
       }
     };
 
@@ -34,12 +43,12 @@ export function openDB() {
   return dbPromise;
 }
 
-function withStore(mode, fn) {
+function withStore(storeName, mode, fn) {
   return openDB().then(
     (db) =>
       new Promise((resolve, reject) => {
-        const tx = db.transaction(VIDEO_STORE, mode);
-        const store = tx.objectStore(VIDEO_STORE);
+        const tx = db.transaction(storeName, mode);
+        const store = tx.objectStore(storeName);
         const request = fn(store);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -57,27 +66,38 @@ export function addVideo(video) {
     savedAt: video.savedAt ?? new Date().toISOString(),
     notes: video.notes ?? '',
   };
-  return withStore('readwrite', (store) => store.add(record)).then(() => record);
+  return withStore(VIDEO_STORE, 'readwrite', (store) => store.add(record)).then(() => record);
 }
 
 export function updateVideo(video) {
-  return withStore('readwrite', (store) => store.put(video)).then(() => video);
+  return withStore(VIDEO_STORE, 'readwrite', (store) => store.put(video)).then(() => video);
 }
 
 export function deleteVideo(id) {
-  return withStore('readwrite', (store) => store.delete(id));
+  return withStore(VIDEO_STORE, 'readwrite', (store) => store.delete(id));
 }
 
 export function getVideo(id) {
-  return withStore('readonly', (store) => store.get(id));
+  return withStore(VIDEO_STORE, 'readonly', (store) => store.get(id));
 }
 
 export function getAllVideos() {
-  return withStore('readonly', (store) => store.getAll());
+  return withStore(VIDEO_STORE, 'readonly', (store) => store.getAll());
 }
 
 export function clearAllVideos() {
-  return withStore('readwrite', (store) => store.clear());
+  return withStore(VIDEO_STORE, 'readwrite', (store) => store.clear());
+}
+
+/* ---- Classification cache (written by public/background.js) ---- */
+// Entry shape: { videoId, title, channel, verdict, confidence, reason, classifiedAt }
+
+export function getAllClassifications() {
+  return withStore(CLASSIFICATION_STORE, 'readonly', (store) => store.getAll());
+}
+
+export function clearClassifications() {
+  return withStore(CLASSIFICATION_STORE, 'readwrite', (store) => store.clear());
 }
 
 /**

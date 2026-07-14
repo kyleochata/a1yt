@@ -1,5 +1,6 @@
 const NAV_ITEMS = [
   { id: 'library', label: 'Library', icon: '▦' },
+  { id: 'filter', label: 'Filter Engine', icon: '◈' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
 
@@ -22,7 +23,7 @@ export default function Sidebar({ activeView, onNavigate }) {
           </button>
         ))}
       </nav>
-      <div className="sidebar-footer">Phase 1 · local only</div>
+      <div className="sidebar-footer">Local only · no sign-in</div>
     </aside>
   );
 }

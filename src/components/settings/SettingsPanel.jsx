@@ -69,10 +69,18 @@ export default function SettingsPanel() {
       />
 
       <div className="settings-block">
-        <h3>Filter sensitivity</h3>
+        <h3>Content filtering</h3>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={prefs.filteringEnabled}
+            onChange={(event) => update({ filteringEnabled: event.target.checked })}
+          />
+          Dim low-quality videos while browsing YouTube
+        </label>
         <p className="hint">
-          How aggressively the filtering engine will flag content once it&apos;s enabled.
-          0 = off, 100 = strictest.
+          Sensitivity: how confident the model must be before a video is dimmed.
+          0 = only blacklisted keywords, 100 = dim anything judged slop.
         </p>
         <div className="slider-row">
           <input

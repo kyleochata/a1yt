@@ -3,8 +3,30 @@
 A YouTube content curator browser extension: filter out AI-generated low-quality
 content and organize videos in a local library — no YouTube sign-in required.
 
-**Phase 1** (current): Local Storage & Library Manager + Settings UI. Everything
-runs locally; no network calls, no LLM yet.
+Current modules: Library Manager + Settings UI (Phase 1) and the **Content
+Filtering Engine** (Module 1) — a local LLM (gemma4 via Ollama) classifies
+videos as quality / neutral / slop while you browse YouTube and dims the slop.
+Everything runs locally; the only network call is to Ollama on `localhost`.
+
+## Filtering engine requirements
+
+- [Ollama](https://ollama.com) installed and running, with the model pulled:
+  `ollama pull gemma4`
+- Allow the extension origin (one-time, macOS):
+  `launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"` — then restart the
+  Ollama app. For manual `ollama serve` runs, export `OLLAMA_ORIGINS` in your
+  shell profile instead. Note `launchctl setenv` does not survive a reboot.
+- Check the **Filter Engine** view in the app for connection status, a test
+  classifier, and the verdict cache.
+
+How it works: a content script scrapes title/channel from video renderers on
+YouTube pages and asks the service worker for a verdict. The worker checks
+trusted channels (always pass) and blacklist keywords (instant slop) first,
+then the IndexedDB verdict cache, and only then calls Ollama (~1s per video,
+one at a time, visible videos first — each video is only ever judged once).
+Slop above the sensitivity threshold gets dimmed with a badge; click the badge
+to reveal the video. The sensitivity slider and trusted/blacklist lists live
+in Settings and apply immediately without re-classification.
 
 ## Development
 
@@ -26,22 +48,27 @@ npm run build    # builds the extension into dist/
 ```
 public/
   manifest.json         MV3 manifest
-  background.js         Service worker (opens the app tab)
+  background.js         Service worker: opens the app tab + classification
+                        service (pre-filters, verdict cache, Ollama queue)
+  content/
+    player-settings.js  2x/no-captions/1080p for library-opened videos
+    classifier.js       Scrapes YouTube pages, dims slop via the worker
 src/
-  db/database.js        IndexedDB setup + CRUD + search (videos store)
+  db/database.js        IndexedDB: videos store + classifications cache
   db/seedData.js        8 sample videos for testing
-  storage/preferences.js localStorage preferences (+ import/export/clear)
+  storage/preferences.js localStorage prefs, mirrored to chrome.storage.local
+  llm/ollamaClient.js   Direct Ollama client for the Filter Engine view
   hooks/                useLibrary, usePreferences
   components/
     layout/Sidebar.jsx
     library/            LibraryManager, VideoCard, VideoForm, SearchBar
+    filter/             FilterPanel (status, test classifier, verdict cache)
     settings/           SettingsPanel, ListEditor
   utils/download.js     JSON file download helper
 ```
 
 ## Roadmap
 
-- **Module 1** — Content filtering engine (Ollama + Llama, local inference)
 - **Module 3** — Discovery engine
 - **Module 5** — Analytics dashboard
 
