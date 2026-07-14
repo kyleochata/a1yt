@@ -24,6 +24,7 @@
         "content/slop-filters.js",
         "content/slop-score.js",
         "content/slop-channel.js",
+        "content/channel-match.js",
         "content/classifier.js"
       ],
       "run_at": "document_idle"

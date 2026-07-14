@@ -35,6 +35,8 @@ Trusted channels + `ytc.allowlist` are never hidden by either layer.
   `public/content/classifier.js` ↔ `public/background.js` (background has no slop key; that's fine)
 - Slop default weights/thresholds: `src/storage/preferences.js` ↔ `public/content/slop-filters.js`
 - LLM prompt: `public/background.js` `buildPrompt()` ↔ `src/llm/ollamaClient.js`
+- Channel matching (`normalizeChannel`/`channelMatches`): `public/content/channel-match.js`
+  ↔ `public/background.js`
 - IndexedDB names/version/upgrade: `src/db/database.js` ↔ `public/background.js`
   (either context may run the upgrade)
 

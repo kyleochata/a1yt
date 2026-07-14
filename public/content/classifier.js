@@ -20,6 +20,7 @@
   const SLOP_CONFIG = self.YTC_SLOP_CONFIG;
   const SLOP = self.YTC_SLOP_SCORE;
   const CHANNEL = self.YTC_SLOP_CHANNEL;
+  const MATCH = self.YTC_CHANNEL_MATCH;
 
   const CONTAINER_SELECTOR = [
     'ytd-rich-item-renderer',
@@ -177,12 +178,10 @@
     return (title?.score ?? 0) + (typeof channel === 'object' && channel ? channel.score : 0);
   }
 
-  function isAllowed(channelName) {
-    const name = (channelName ?? '').trim().toLowerCase();
-    if (!name) return false;
+  function isAllowed(channelName, channelPath) {
     return (
-      allowlist.includes(name) ||
-      prefs.trustedChannels.some((c) => c.trim().toLowerCase() === name)
+      allowlist.some((c) => MATCH.channelMatches(c, channelName, channelPath)) ||
+      prefs.trustedChannels.some((c) => MATCH.channelMatches(c, channelName, channelPath))
     );
   }
 
@@ -263,7 +262,7 @@
 
   function applyVerdict(el) {
     const id = el.dataset.ytcId;
-    if (!prefs.filteringEnabled || isAllowed(el.dataset.ytcChannel)) {
+    if (!prefs.filteringEnabled || isAllowed(el.dataset.ytcChannel, el.dataset.ytcChannelPath)) {
       clearMarks(el);
       return;
     }
@@ -395,7 +394,7 @@
         !results.has(video.id) &&
         !pending.has(video.id) &&
         !failed.has(video.id) &&
-        !isAllowed(video.channel)
+        !isAllowed(video.channel, video.channelPath)
       ) {
         if (!queue.some((q) => q.video.id === video.id)) queue.push({ video, el });
       }

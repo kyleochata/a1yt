@@ -22,6 +22,26 @@ const DEFAULT_PREFERENCES = {
   filteringEnabled: true,
 };
 
+// Keep in sync with public/content/channel-match.js (classic scripts, no imports).
+function normalizeChannel(raw) {
+  let value = (raw ?? '').trim().toLowerCase();
+  value = value.replace(/^https?:\/\//, '');
+  value = value.replace(/^www\./, '');
+  value = value.replace(/^youtube\.com/, '');
+  value = value.replace(/^\/+|\/+$/g, '');
+  value = value.replace(/^@/, '');
+  return value;
+}
+
+function channelMatches(entry, channelName, channelPath) {
+  const normalized = normalizeChannel(entry);
+  if (!normalized) return false;
+  return (
+    normalized === normalizeChannel(channelName) ||
+    normalized === normalizeChannel(channelPath)
+  );
+}
+
 // No default_popup in the manifest, so clicking the toolbar icon fires this.
 // The library manager needs a full tab, not a 600px popup.
 chrome.action.onClicked.addListener(() => {
@@ -40,8 +60,7 @@ async function classify(video) {
   if (!video?.id || !video.title) throw new Error('video needs id and title');
   const prefs = await getPreferences();
 
-  const channel = (video.channel ?? '').trim().toLowerCase();
-  if (channel && prefs.trustedChannels.some((c) => c.trim().toLowerCase() === channel)) {
+  if (prefs.trustedChannels.some((c) => channelMatches(c, video.channel, video.channelPath))) {
     return { verdict: 'quality', confidence: 1, reason: 'Trusted channel', source: 'trusted' };
   }
 
