@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "YT Curator",
+  "version": "0.1.0",
+  "description": "Filter out low-quality content and organize YouTube videos locally, without signing in.",
+  "action": {
+    "default_title": "Open YT Curator"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
