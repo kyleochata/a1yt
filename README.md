@@ -14,10 +14,10 @@ npm run dev      # runs the UI at localhost as a plain web app
 npm run build    # builds the extension into dist/
 ```
 
-## Load in Chrome
+## Load in Brave (or Chrome)
 
 1. `npm run build`
-2. Open `chrome://extensions`, enable **Developer mode**
+2. Open `brave://extensions` (`chrome://extensions` in Chrome), enable **Developer mode**
 3. **Load unpacked** → select the `dist/` folder
 4. Click the toolbar icon — the app opens in a full tab
 

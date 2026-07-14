@@ -1,3 +1,18 @@
+// Tag YouTube links with the marker the content script watches for
+// (public/content/player-settings.js) so playback preferences are applied
+// only to videos opened from the library.
+function watchUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.endsWith('youtube.com') || parsed.hostname === 'youtu.be') {
+      parsed.hash = 'ytc-open';
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, {
     year: 'numeric',
@@ -10,7 +25,7 @@ export default function VideoCard({ video, onEdit, onDelete }) {
   return (
     <article className="video-card">
       <div className="video-card-header">
-        <a href={video.url} target="_blank" rel="noreferrer" className="video-title">
+        <a href={watchUrl(video.url)} target="_blank" rel="noreferrer" className="video-title">
           {video.title || 'Untitled'}
         </a>
         <div className="video-card-actions">
