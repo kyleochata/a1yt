@@ -27,11 +27,24 @@ const DEFAULT_PREFERENCES = {
 function normalizeChannel(raw) {
   let value = (raw ?? '').trim().toLowerCase();
   value = value.replace(/^https?:\/\//, '');
-  value = value.replace(/^www\./, '');
+  value = value.replace(/^(?:www|m|music)\./, ''); // m. arrives when a URL is copied from mobile
   value = value.replace(/^youtube\.com/, '');
   value = value.replace(/^\/+|\/+$/g, '');
   value = value.replace(/^@/, '');
   return value;
+}
+
+// Blacklist keywords are matched against the folded title, the same way the
+// heuristic layer treats titles (normalizeTitle in public/content/slop-score.js):
+// without this, ‘fancy’ punctuation and 𝘂𝗻𝗶𝗰𝗼𝗱𝗲 fonts walk straight past the
+// user's explicit blacklist.
+function foldForMatching(raw) {
+  return String(raw ?? '')
+    .normalize('NFKC')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .trim()
+    .toLowerCase();
 }
 
 function channelMatches(entry, channelName, channelPath) {
@@ -71,9 +84,9 @@ async function classify(video) {
     return { verdict: 'quality', confidence: 1, reason: 'Allowlisted channel', source: 'allowlist' };
   }
 
-  const title = video.title.toLowerCase();
+  const title = foldForMatching(video.title);
   const keyword = prefs.blacklistKeywords.find(
-    (k) => k.trim() && title.includes(k.trim().toLowerCase())
+    (k) => k.trim() && title.includes(foldForMatching(k))
   );
   if (keyword) {
     return {

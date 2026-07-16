@@ -26,6 +26,15 @@ test('normalizeChannel strips URL prefixes, slashes, and @', () => {
   assert.equal(normalizeChannel('youtube.com/channel/UCxyz'), 'channel/ucxyz');
 });
 
+test('normalizeChannel strips mobile and music subdomains', () => {
+  // Pasting a channel URL off a phone is the common way an m. entry appears;
+  // it used to normalize to 'm.youtube.com/@foo' and never match anything.
+  assert.equal(normalizeChannel('https://m.youtube.com/@Veritasium'), 'veritasium');
+  assert.equal(normalizeChannel('m.youtube.com/channel/UCxyz'), 'channel/ucxyz');
+  assert.equal(normalizeChannel('https://music.youtube.com/@foo'), 'foo');
+  assert.ok(channelMatches('https://m.youtube.com/@veritasium', 'Veritasium', '/@veritasium'));
+});
+
 test('normalizeChannel leaves display names as trim+lowercase', () => {
   assert.equal(normalizeChannel('  Veritasium  '), 'veritasium');
   assert.equal(normalizeChannel('Linus Tech Tips'), 'linus tech tips');

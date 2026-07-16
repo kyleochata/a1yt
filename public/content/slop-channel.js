@@ -78,6 +78,18 @@
     }
   }
 
+  // The channel's canonical UC… id. One channel is reachable as "/@handle",
+  // "/channel/UC…", "/c/…" and "/user/…", and different feed layouts hand us
+  // different forms — keying the skeleton table by the raw path would count a
+  // single channel's own templates as reuse ACROSS channels.
+  function extractChannelId(data) {
+    const id =
+      data?.metadata?.channelMetadataRenderer?.externalId ??
+      data?.header?.c4TabbedHeaderRenderer?.channelId ??
+      data?.microformat?.microformatDataRenderer?.urlCanonical?.match(/\/channel\/(UC[\w-]+)/)?.[1];
+    return typeof id === 'string' && id ? id : null;
+  }
+
   // Depth-first walk collecting videoRenderer nodes wherever YouTube nests them.
   function collectVideoRenderers(node, out, limit) {
     if (!node || typeof node !== 'object' || out.length >= limit) return;
@@ -118,14 +130,16 @@
   }
 
   // Record this channel's repeated templates globally; report whether any of
-  // them was already recorded for a DIFFERENT channel.
-  async function updateSkeletonTable(channelPath, templates, now) {
+  // them was already recorded for a DIFFERENT channel. `channelKey` must be
+  // canonical (see extractChannelId) — two keys for one channel would make it
+  // look like it were sharing templates with itself.
+  async function updateSkeletonTable(channelKey, templates, now) {
     const table = await storageGet(SKELETON_KEY);
     let shared = false;
     for (const skeleton of templates) {
       const entry = table[skeleton] ?? { channels: [], seenAt: now };
-      if (entry.channels.some((c) => c !== channelPath)) shared = true;
-      if (!entry.channels.includes(channelPath)) entry.channels = [...entry.channels, channelPath].slice(0, 5);
+      if (entry.channels.some((c) => c !== channelKey)) shared = true;
+      if (!entry.channels.includes(channelKey)) entry.channels = [...entry.channels, channelKey].slice(0, 5);
       entry.seenAt = now;
       table[skeleton] = entry;
     }
@@ -142,6 +156,7 @@
 
   async function fetchStats(channelPath, config) {
     let stats = null;
+    let channelId = null;
     try {
       const res = await fetch(`${location.origin}${channelPath}/videos`);
       if (res.ok) {
@@ -150,13 +165,20 @@
           const renderers = [];
           collectVideoRenderers(data, renderers, config.channel.recentVideos + 10);
           stats = computeStats(renderers, config);
+          channelId = extractChannelId(data);
         }
       }
     } catch {
       // network error / page shape change — treated as "no stats"
     }
     if (stats) {
-      stats.sharedSkeletonGlobally = await updateSkeletonTable(channelPath, stats.templates, Date.now());
+      // channelPath is only a fallback: if the id is ever missing we'd rather
+      // score the channel than drop its templates on the floor.
+      stats.sharedSkeletonGlobally = await updateSkeletonTable(
+        channelId ?? channelPath,
+        stats.templates,
+        Date.now()
+      );
       delete stats.templates;
     }
     return stats;

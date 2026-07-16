@@ -64,7 +64,7 @@ export default function SettingsPanel() {
 
       <ListEditor
         label="Blacklist keywords"
-        hint="Videos whose titles contain these words will be hidden."
+        hint="Videos whose titles contain these words are always flagged as slop and dimmed on YouTube."
         items={prefs.blacklistKeywords}
         placeholder="e.g. reaction"
         onChange={(blacklistKeywords) => update({ blacklistKeywords })}

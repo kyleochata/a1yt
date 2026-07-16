@@ -116,11 +116,17 @@ export function importPreferencesJSON(json) {
   return savePreferences(prefs);
 }
 
+// Extension-owned chrome.storage.local keys. This module must never *write*
+// these (see CLAUDE.md), but "Clear all data" has to remove them: the allowlist
+// in particular has no app-side editor, so an entry that survives a wipe
+// bypasses both filter layers forever.
+const EXTENSION_KEYS = ['ytc.allowlist', 'ytc.channelStats', 'ytc.skeletons'];
+
 /** Wipe preferences, the video library, and the classification cache. */
 export async function clearAllData() {
   localStorage.removeItem(PREFS_KEY);
   try {
-    globalThis.chrome?.storage?.local?.remove(PREFS_KEY);
+    globalThis.chrome?.storage?.local?.remove([PREFS_KEY, ...EXTENSION_KEYS]);
   } catch {
     // dev mode
   }

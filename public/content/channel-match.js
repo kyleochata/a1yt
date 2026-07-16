@@ -9,7 +9,7 @@
   function normalizeChannel(raw) {
     let value = (raw ?? '').trim().toLowerCase();
     value = value.replace(/^https?:\/\//, '');
-    value = value.replace(/^www\./, '');
+    value = value.replace(/^(?:www|m|music)\./, ''); // m. arrives when a URL is copied from mobile
     value = value.replace(/^youtube\.com/, '');
     value = value.replace(/^\/+|\/+$/g, '');
     value = value.replace(/^@/, '');

@@ -116,6 +116,8 @@ export async function searchVideos(criteria = {}) {
   const { query, channel, tags, from, to } = criteria;
   const all = await getAllVideos();
   const q = query?.trim().toLowerCase();
+  const lower = from ? dayBoundISO(from, 'start') : null;
+  const upper = to ? dayBoundISO(to, 'end') : null;
 
   return all.filter((video) => {
     if (q) {
@@ -126,15 +128,24 @@ export async function searchVideos(criteria = {}) {
     }
     if (channel && video.channel !== channel) return false;
     if (tags?.length && !tags.every((t) => video.tags?.includes(t))) return false;
-    if (from && video.savedAt < new Date(from).toISOString()) return false;
-    if (to) {
-      // Make the upper bound inclusive of the whole day.
-      const end = new Date(to);
-      end.setHours(23, 59, 59, 999);
-      if (video.savedAt > end.toISOString()) return false;
-    }
+    if (lower && video.savedAt < lower) return false;
+    if (upper && video.savedAt > upper) return false;
     return true;
   });
+}
+
+/**
+ * A date-picker value ("2026-07-16") as an ISO instant at the start or end of
+ * that day *in the user's timezone* — savedAt is a UTC ISO string, so both
+ * bounds have to be built the same way. (`new Date('2026-07-16')` parses as UTC
+ * midnight; pairing that with a local-time end-of-day silently made the upper
+ * bound exclusive everywhere west of UTC.) Full timestamps pass through, and an
+ * unparseable value drops the bound rather than filtering everything out.
+ */
+function dayBoundISO(value, edge) {
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const date = new Date(dateOnly ? `${value}T${edge === 'end' ? '23:59:59.999' : '00:00:00.000'}` : value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 export async function exportLibraryJSON() {

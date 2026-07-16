@@ -61,7 +61,9 @@
   const failed = new Set(); // videoIds that errored (Ollama down etc.) — retried on navigation
   const pending = new Set(); // videoIds with an in-flight request
   const queue = []; // videos waiting for a free slot
+  const titles = new Map(); // videoId -> raw title (weight-independent scoring input)
   const titleScores = new Map(); // videoId -> {score, signals}
+  const channelStats = new Map(); // channelPath -> stats|null (weight-independent scoring input)
   const channelScores = new Map(); // channelPath -> {score, signals} | 'pending'
   const revealed = new Set(); // videoIds un-hidden via "show anyway"
 
@@ -73,6 +75,10 @@
       weights: { ...DEFAULT_SLOP_PREFS.weights, ...(stored?.slop?.weights ?? {}) },
     };
     return merged;
+  }
+
+  function sameList(a, b) {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
   }
 
   /* ---- styles ---- */
@@ -159,6 +165,7 @@
   function scoreVideo(video) {
     if (!titleScores.has(video.id)) {
       const result = SLOP.scoreTitle(video.title, SLOP_CONFIG, prefs.slop.weights);
+      titles.set(video.id, video.title);
       titleScores.set(video.id, result);
       debugLog('title', video, result);
     }
@@ -166,11 +173,27 @@
       channelScores.set(video.channelPath, 'pending');
       CHANNEL.getChannelStats(video.channelPath, SLOP_CONFIG).then((stats) => {
         const result = SLOP.scoreChannelStats(stats, SLOP_CONFIG, prefs.slop.weights);
+        channelStats.set(video.channelPath, stats);
         channelScores.set(video.channelPath, result);
         debugLog('channel', video, result);
         applyAll();
       });
     }
+  }
+
+  // Weights changed: rebuild both score maps from the raw inputs we already
+  // hold. Rescoring in place (rather than clearing and waiting for the
+  // debounced scan) keeps every card's score continuous — a momentary 0 would
+  // un-hide the whole feed until the rescan landed.
+  function rescoreAll() {
+    for (const [id, title] of titles) {
+      titleScores.set(id, SLOP.scoreTitle(title, SLOP_CONFIG, prefs.slop.weights));
+    }
+    for (const [path, stats] of channelStats) {
+      channelScores.set(path, SLOP.scoreChannelStats(stats, SLOP_CONFIG, prefs.slop.weights));
+    }
+    // Channels still in flight stay 'pending'; their handler scores with the
+    // new weights when it resolves.
   }
 
   function slopScore(el) {
@@ -236,7 +259,13 @@
         const next = [
           ...new Set([...allowlist, channelName.toLowerCase(), ...(path ? [path] : [])]),
         ];
-        chrome.storage.local.set({ [ALLOWLIST_KEY]: next }); // onChanged re-applies
+        try {
+          chrome.storage.local.set({ [ALLOWLIST_KEY]: next }); // onChanged re-applies
+        } catch {
+          // Extension reloaded from under us; this page's script is orphaned.
+          allow.textContent = 'Reload page to allowlist';
+          allow.disabled = true;
+        }
       });
       box.appendChild(allow);
     }
@@ -250,8 +279,11 @@
     el.querySelector(':scope > .ytc-placeholder')?.remove();
     const existing = el.querySelector(':scope > .ytc-badge');
     if (existing) {
-      existing.textContent = badgeText;
-      existing.title = badgeTitle;
+      // Only write when the text actually changed: an unconditional write
+      // replaces the text node, which our own MutationObserver sees, which
+      // schedules another scan — a self-sustaining loop while any card is dimmed.
+      if (existing.textContent !== badgeText) existing.textContent = badgeText;
+      if (existing.title !== badgeTitle) existing.title = badgeTitle;
       return;
     }
     const badge = document.createElement('div');
@@ -443,9 +475,17 @@
       applyAll();
     }
     if (changes['ytc.preferences']) {
+      const previousKeywords = prefs.blacklistKeywords;
       prefs = mergePrefs(changes['ytc.preferences'].newValue);
-      titleScores.clear(); // weights may have changed; rescore on next scan
-      channelScores.clear(); // stats stay cached in storage; only rescored
+      rescoreAll(); // weights may have changed
+      // The blacklist is enforced in background.js, ahead of its cache, so a
+      // changed list only takes effect if we drop the verdicts we already hold:
+      // scan() skips any video with a result, and this map outlives SPA
+      // navigation.
+      if (!sameList(previousKeywords, prefs.blacklistKeywords)) {
+        results.clear();
+        failed.clear();
+      }
       applyAll(); // re-evaluate thresholds/enabled without reclassifying
       if (prefs.filteringEnabled) scheduleScan();
     }
