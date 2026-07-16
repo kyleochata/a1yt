@@ -55,7 +55,8 @@
   };
 
   let prefs = { ...DEFAULT_PREFERENCES };
-  let allowlist = []; // lowercased channel names, user-managed via placeholder button
+  let allowlist = []; // lowercased channel names and/or channel paths, user-managed via placeholder button
+  let storageLoaded = false; // don't filter until prefs + allowlist have loaded
   const results = new Map(); // videoId -> {verdict, confidence, reason, source} (LLM layer)
   const failed = new Set(); // videoIds that errored (Ollama down etc.) — retried on navigation
   const pending = new Set(); // videoIds with an in-flight request
@@ -229,7 +230,12 @@
       allow.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const next = [...new Set([...allowlist, channelName.toLowerCase()])];
+        // Store the channel path too: some layouts expose only the /@handle
+        // link, and a name-only entry can't match those cards.
+        const path = (el.dataset.ytcChannelPath ?? '').toLowerCase();
+        const next = [
+          ...new Set([...allowlist, channelName.toLowerCase(), ...(path ? [path] : [])]),
+        ];
         chrome.storage.local.set({ [ALLOWLIST_KEY]: next }); // onChanged re-applies
       });
       box.appendChild(allow);
@@ -268,8 +274,13 @@
     }
 
     // Layer 1: heuristic slop score.
+    // Never fully hide a card whose channel we couldn't extract: a hidden card
+    // (display:none) stops YouTube from lazily rendering its byline, so an
+    // allowlisted channel could stay hidden forever. Dimming keeps it in
+    // layout; once the byline renders, the isAllowed gate above clears it.
+    const channelKnown = Boolean(el.dataset.ytcChannel || el.dataset.ytcChannelPath);
     const score = slopScore(el);
-    if (score >= prefs.slop.hideThreshold && !revealed.has(id)) {
+    if (score >= prefs.slop.hideThreshold && !revealed.has(id) && channelKnown) {
       renderHidden(el, score);
       return;
     }
@@ -371,7 +382,10 @@
   /* ---- scanning ---- */
 
   function scan() {
-    if (!prefs.filteringEnabled) return;
+    // storageLoaded guards the startup race: the MutationObserver can fire
+    // before the allowlist/prefs arrive, and filtering against an empty
+    // allowlist would hide allowlisted channels.
+    if (!storageLoaded || !prefs.filteringEnabled) return;
     document.querySelectorAll(CONTAINER_SELECTOR).forEach((el) => {
       const video = extractVideo(el);
       if (!video) return;
@@ -380,10 +394,15 @@
       if (el.dataset.ytcId !== video.id) {
         el.dataset.ytcId = video.id;
         clearMarks(el);
+        el.dataset.ytcChannel = video.channel;
+        if (video.channelPath) el.dataset.ytcChannelPath = video.channelPath;
+        else delete el.dataset.ytcChannelPath;
+      } else {
+        // Same video: bylines render lazily, so a re-scan can extract an empty
+        // channel. Keep previously captured values instead of erasing them.
+        if (video.channel) el.dataset.ytcChannel = video.channel;
+        if (video.channelPath) el.dataset.ytcChannelPath = video.channelPath;
       }
-      el.dataset.ytcChannel = video.channel;
-      if (video.channelPath) el.dataset.ytcChannelPath = video.channelPath;
-      else delete el.dataset.ytcChannelPath;
 
       scoreVideo(video);
       applyVerdict(el);
@@ -394,7 +413,7 @@
         !results.has(video.id) &&
         !pending.has(video.id) &&
         !failed.has(video.id) &&
-        !isAllowed(video.channel, video.channelPath)
+        !isAllowed(el.dataset.ytcChannel, el.dataset.ytcChannelPath)
       ) {
         if (!queue.some((q) => q.video.id === video.id)) queue.push({ video, el });
       }
@@ -413,6 +432,7 @@
   chrome.storage.local.get(['ytc.preferences', ALLOWLIST_KEY], (stored) => {
     prefs = mergePrefs(stored?.['ytc.preferences']);
     allowlist = stored?.[ALLOWLIST_KEY] ?? [];
+    storageLoaded = true;
     if (prefs.filteringEnabled) scan();
   });
 

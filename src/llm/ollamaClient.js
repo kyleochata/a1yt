@@ -27,9 +27,14 @@ export async function getOllamaStatus() {
 // Keep this prompt in sync with public/background.js.
 export function buildPrompt({ title, channel }) {
   const channelLine = channel ? `\nChannel: ${channel}` : '';
+  // Today's date grounds the model: without it, titles mentioning dates after
+  // its training cutoff (e.g. "June 2026") read as fabricated/future slop.
+  const today = new Date().toISOString().slice(0, 10);
   return (
     'You are a YouTube content quality classifier. Classify this video as exactly one of: quality, neutral, slop.\n\n' +
+    `Today's date: ${today}\n` +
     `Title: "${title}"${channelLine}\n\n` +
+    'Dates or years in the title are not a quality signal; never mark a video slop because its date seems recent, unfamiliar, or in the future.\n' +
     'Respond with JSON only: {"verdict": "quality|neutral|slop", "confidence": <0-1>, "reason": "<10 words max>"}'
   );
 }

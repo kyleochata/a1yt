@@ -15,6 +15,7 @@ const MODEL = 'gemma4';
 const VERDICTS = ['quality', 'neutral', 'slop'];
 
 const PREFS_KEY = 'ytc.preferences';
+const ALLOWLIST_KEY = 'ytc.allowlist'; // owned by content/classifier.js; read-only here
 const DEFAULT_PREFERENCES = {
   trustedChannels: [],
   blacklistKeywords: [],
@@ -58,10 +59,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 async function classify(video) {
   if (!video?.id || !video.title) throw new Error('video needs id and title');
-  const prefs = await getPreferences();
+  const { prefs, allowlist } = await getSettings();
 
   if (prefs.trustedChannels.some((c) => channelMatches(c, video.channel, video.channelPath))) {
     return { verdict: 'quality', confidence: 1, reason: 'Trusted channel', source: 'trusted' };
+  }
+
+  // Checked before the cache so a pre-allowlist "slop" verdict can't resurface,
+  // and no new verdicts are cached for allowlisted channels.
+  if (allowlist.some((c) => channelMatches(c, video.channel, video.channelPath))) {
+    return { verdict: 'quality', confidence: 1, reason: 'Allowlisted channel', source: 'allowlist' };
   }
 
   const title = video.title.toLowerCase();
@@ -78,7 +85,7 @@ async function classify(video) {
   }
 
   const cached = await getCachedClassification(video.id);
-  if (cached) {
+  if (cached && cached.promptVersion === PROMPT_VERSION) {
     return {
       verdict: cached.verdict,
       confidence: cached.confidence,
@@ -96,17 +103,21 @@ async function classify(video) {
     confidence: result.confidence,
     reason: result.reason,
     classifiedAt: new Date().toISOString(),
+    promptVersion: PROMPT_VERSION,
   });
   return { ...result, source: 'llm' };
 }
 
-function getPreferences() {
-  // Mirrored into chrome.storage.local by src/storage/preferences.js
+function getSettings() {
+  // Preferences are mirrored into chrome.storage.local by src/storage/preferences.js
   // (the app page itself uses localStorage, which workers can't read).
   return chrome.storage.local
-    .get(PREFS_KEY)
-    .then((stored) => ({ ...DEFAULT_PREFERENCES, ...(stored?.[PREFS_KEY] ?? {}) }))
-    .catch(() => ({ ...DEFAULT_PREFERENCES }));
+    .get([PREFS_KEY, ALLOWLIST_KEY])
+    .then((stored) => ({
+      prefs: { ...DEFAULT_PREFERENCES, ...(stored?.[PREFS_KEY] ?? {}) },
+      allowlist: stored?.[ALLOWLIST_KEY] ?? [],
+    }))
+    .catch(() => ({ prefs: { ...DEFAULT_PREFERENCES }, allowlist: [] }));
 }
 
 /* ---- Ollama ---- */
@@ -120,11 +131,20 @@ function enqueueLLM(fn) {
 }
 
 // Keep this prompt in sync with src/llm/ollamaClient.js.
+// Bump PROMPT_VERSION when the prompt changes materially: cached verdicts from
+// older prompts are then treated as misses and lazily re-classified.
+const PROMPT_VERSION = 2;
+
 function buildPrompt(video) {
   const channelLine = video.channel ? `\nChannel: ${video.channel}` : '';
+  // Today's date grounds the model: without it, titles mentioning dates after
+  // its training cutoff (e.g. "June 2026") read as fabricated/future slop.
+  const today = new Date().toISOString().slice(0, 10);
   return (
     'You are a YouTube content quality classifier. Classify this video as exactly one of: quality, neutral, slop.\n\n' +
+    `Today's date: ${today}\n` +
     `Title: "${video.title}"${channelLine}\n\n` +
+    'Dates or years in the title are not a quality signal; never mark a video slop because its date seems recent, unfamiliar, or in the future.\n' +
     'Respond with JSON only: {"verdict": "quality|neutral|slop", "confidence": <0-1>, "reason": "<10 words max>"}'
   );
 }

@@ -52,6 +52,14 @@ test('channelMatches matches display-name entries', () => {
   assert.ok(channelMatches('Veritasium', 'Veritasium', undefined));
 });
 
+test('channelMatches matches path-form entries even with an empty display name', () => {
+  // The allowlist button stores the /@handle path alongside the name; cards
+  // whose byline hasn't rendered yet expose only the channelPath.
+  assert.ok(channelMatches('/@foobar', '', '/@foobar'));
+  assert.ok(channelMatches('/@foobar', 'Foo Bar', '/@foobar'));
+  assert.ok(!channelMatches('/@foobar', 'Foo Bar', '/@someoneelse'));
+});
+
 test('channelMatches rejects non-matching and empty entries', () => {
   assert.ok(!channelMatches('@veritasium', 'Veritas', '/@veritas'));
   assert.ok(!channelMatches('', 'Veritasium', '/@veritasium'));
