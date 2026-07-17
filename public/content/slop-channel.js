@@ -225,5 +225,5 @@
     return promise;
   }
 
-  root.YTC_SLOP_CHANNEL = { getChannelStats };
+  root.YTC_SLOP_CHANNEL = { getChannelStats, parseDurationSeconds };
 })(typeof self !== 'undefined' ? self : globalThis);

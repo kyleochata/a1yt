@@ -44,7 +44,7 @@ Trusted channels + `ytc.allowlist` are never hidden by either layer.
 - Channel matching (`normalizeChannel`/`channelMatches`): `public/content/channel-match.js`
   ↔ `public/background.js`
 - IndexedDB names/version/upgrade: `src/db/database.js` ↔ `public/background.js`
-  (either context may run the upgrade)
+  (either context may run the upgrade; enforced by `tests/db-schema-sync.test.mjs`)
 
 ## Storage keys (chrome.storage.local)
 

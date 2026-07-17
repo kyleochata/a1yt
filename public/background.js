@@ -115,6 +115,7 @@ async function classify(video) {
     verdict: result.verdict,
     confidence: result.confidence,
     reason: result.reason,
+    durationSeconds: video.durationSeconds ?? null,
     classifiedAt: new Date().toISOString(),
     promptVersion: PROMPT_VERSION,
   });
@@ -192,9 +193,10 @@ async function classifyWithLLM(video) {
 // in sync with src/db/database.js — either context may run the upgrade.
 
 const DB_NAME = 'yt-curator';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const VIDEO_STORE = 'videos';
 const CLASSIFICATION_STORE = 'classifications';
+const DISCOVERY_STORE = 'discovery';
 
 let dbPromise = null;
 
@@ -216,9 +218,20 @@ function openDB() {
         store.createIndex('verdict', 'verdict', { unique: false });
         store.createIndex('classifiedAt', 'classifiedAt', { unique: false });
       }
+      if (!db.objectStoreNames.contains(DISCOVERY_STORE)) {
+        db.createObjectStore(DISCOVERY_STORE, { keyPath: 'videoId' });
+      }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      // If the app page upgrades the shared DB later, drop this connection
+      // so it doesn't block that upgrade and hang the promise on either side.
+      request.result.onversionchange = () => {
+        request.result.close();
+        dbPromise = null;
+      };
+      resolve(request.result);
+    };
     request.onerror = () => {
       dbPromise = null;
       reject(request.error);

@@ -1,14 +1,16 @@
 // IndexedDB layer for the video library.
 // All functions return Promises. Video shape:
-// { id, url, title, channel, tags: string[], savedAt: ISO string, notes }
+// { id, url, title, channel, tags: string[], savedAt: ISO string, notes,
+//   durationSeconds: number|null }
 
 // Keep names, version, and upgrade logic in sync with public/background.js —
 // the service worker opens the same database and either context may run the
 // upgrade.
 const DB_NAME = 'yt-curator';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const VIDEO_STORE = 'videos';
 const CLASSIFICATION_STORE = 'classifications';
+const DISCOVERY_STORE = 'discovery';
 
 let dbPromise = null;
 
@@ -19,8 +21,8 @@ export function openDB() {
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
-      // Future modules (discovery, analytics) add their own stores here
-      // under a bumped DB_VERSION.
+      // Future modules (analytics) add their own stores here under a bumped
+      // DB_VERSION.
       if (!db.objectStoreNames.contains(VIDEO_STORE)) {
         const store = db.createObjectStore(VIDEO_STORE, { keyPath: 'id' });
         store.createIndex('channel', 'channel', { unique: false });
@@ -32,9 +34,21 @@ export function openDB() {
         store.createIndex('verdict', 'verdict', { unique: false });
         store.createIndex('classifiedAt', 'classifiedAt', { unique: false });
       }
+      if (!db.objectStoreNames.contains(DISCOVERY_STORE)) {
+        db.createObjectStore(DISCOVERY_STORE, { keyPath: 'videoId' });
+      }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      // If the other context (service worker / app page) upgrades the
+      // shared DB later, drop this connection so it doesn't block that
+      // upgrade and hang the promise on either side.
+      request.result.onversionchange = () => {
+        request.result.close();
+        dbPromise = null;
+      };
+      resolve(request.result);
+    };
     request.onerror = () => {
       dbPromise = null;
       reject(request.error);
@@ -65,6 +79,7 @@ export function addVideo(video) {
     tags: video.tags ?? [],
     savedAt: video.savedAt ?? new Date().toISOString(),
     notes: video.notes ?? '',
+    durationSeconds: video.durationSeconds ?? null,
   };
   return withStore(VIDEO_STORE, 'readwrite', (store) => store.add(record)).then(() => record);
 }
@@ -90,7 +105,8 @@ export function clearAllVideos() {
 }
 
 /* ---- Classification cache (written by public/background.js) ---- */
-// Entry shape: { videoId, title, channel, verdict, confidence, reason, classifiedAt }
+// Entry shape: { videoId, title, channel, verdict, confidence, reason,
+//   durationSeconds: number|null, classifiedAt }
 
 export function getAllClassifications() {
   return withStore(CLASSIFICATION_STORE, 'readonly', (store) => store.getAll());
@@ -98,6 +114,22 @@ export function getAllClassifications() {
 
 export function clearClassifications() {
   return withStore(CLASSIFICATION_STORE, 'readwrite', (store) => store.clear());
+}
+
+/* ---- Discovery dismissals (Module 3: quality inbox) ---- */
+// Entry shape: { videoId, status: 'dismissed', at: ISO string }
+
+export function getAllDismissals() {
+  return withStore(DISCOVERY_STORE, 'readonly', (store) => store.getAll());
+}
+
+export function dismissSuggestion(videoId) {
+  const record = { videoId, status: 'dismissed', at: new Date().toISOString() };
+  return withStore(DISCOVERY_STORE, 'readwrite', (store) => store.put(record)).then(() => record);
+}
+
+export function clearDismissals() {
+  return withStore(DISCOVERY_STORE, 'readwrite', (store) => store.clear());
 }
 
 /**
