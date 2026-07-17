@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "YT Curator",
+  "version": "0.1.0",
+  "description": "Filter out low-quality content and organize YouTube videos locally, without signing in.",
+  "action": {
+    "default_title": "Open YT Curator"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["http://localhost:11434/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["content/player-settings.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": [
+        "content/slop-filters.js",
+        "content/slop-score.js",
+        "content/slop-channel.js",
+        "content/channel-match.js",
+        "content/classifier.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
