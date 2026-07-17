@@ -119,6 +119,30 @@
     return match ? match[1] : null;
   }
 
+  const DURATION_TEXT_RE = /^\d{1,2}(?::\d{2}){1,2}$/;
+
+  // Duration badge markup varies across YouTube's renderer generations (the
+  // classic ytd-* Polymer components vs. the newer yt-lockup-view-model
+  // redesign). The last resort isn't tied to a specific class name — it
+  // scans small badge-like elements near the thumbnail for "mm:ss"-shaped
+  // text, so future markup churn degrades gracefully instead of silently
+  // going blank again.
+  function findDurationText(el) {
+    const known =
+      el.querySelector('ytd-thumbnail-overlay-time-status-renderer #text')?.textContent ??
+      el.querySelector('ytd-thumbnail-overlay-time-status-renderer')?.textContent ??
+      el.querySelector('badge-shape .badge-shape-wiz__text')?.textContent ??
+      null;
+    if (known?.trim()) return known.trim();
+
+    const thumb = el.querySelector('#thumbnail, ytd-thumbnail, yt-thumbnail-view-model') ?? el;
+    for (const node of thumb.querySelectorAll('span, div')) {
+      const text = node.textContent.trim();
+      if (DURATION_TEXT_RE.test(text)) return text;
+    }
+    return '';
+  }
+
   function extractVideo(el) {
     if (el.querySelector('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer')) return null;
 
@@ -151,11 +175,7 @@
 
     // Live streams, premieres, and some Shorts renderers omit this badge —
     // durationSeconds is just null then, not an error.
-    const durationText = (
-      el.querySelector('ytd-thumbnail-overlay-time-status-renderer #text')?.textContent ??
-      el.querySelector('ytd-thumbnail-overlay-time-status-renderer')?.textContent ??
-      ''
-    ).trim();
+    const durationText = findDurationText(el);
     const durationSeconds = durationText ? CHANNEL.parseDurationSeconds(durationText) : null;
 
     return { id, title, channel, channelPath, durationSeconds };
