@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { formatDuration, parseDurationInput } from '../../utils/duration.js';
 
-const EMPTY = { url: '', title: '', channel: '', tags: '', notes: '' };
+const EMPTY = { url: '', title: '', channel: '', tags: '', notes: '', duration: '' };
 
 /** Add/edit form. Pass `initial` (a video record) to edit; omit to add. */
 export default function VideoForm({ initial, onSubmit, onCancel }) {
@@ -14,6 +15,7 @@ export default function VideoForm({ initial, onSubmit, onCancel }) {
         channel: initial.channel,
         tags: (initial.tags ?? []).join(', '),
         notes: initial.notes ?? '',
+        duration: formatDuration(initial.durationSeconds) ?? '',
       });
     } else {
       setFields(EMPTY);
@@ -36,6 +38,7 @@ export default function VideoForm({ initial, onSubmit, onCancel }) {
       channel: fields.channel.trim(),
       tags: [...new Set(tags)],
       notes: fields.notes.trim(),
+      durationSeconds: fields.duration.trim() ? parseDurationInput(fields.duration.trim()) : null,
     });
   };
 
@@ -50,6 +53,10 @@ export default function VideoForm({ initial, onSubmit, onCancel }) {
         <label>
           Channel
           <input value={fields.channel} onChange={set('channel')} required />
+        </label>
+        <label>
+          Duration <span className="hint">(mm:ss, optional)</span>
+          <input value={fields.duration} onChange={set('duration')} placeholder="12:34" />
         </label>
         <label className="form-span">
           URL

@@ -1,6 +1,7 @@
 const NAV_ITEMS = [
   { id: 'library', label: 'Library', icon: '▦' },
   { id: 'filter', label: 'Filter Engine', icon: '◈' },
+  { id: 'discovery', label: 'Discovery', icon: '◉' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
 

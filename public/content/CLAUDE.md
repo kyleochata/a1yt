@@ -5,7 +5,7 @@
   Keep the `typeof self !== 'undefined' ? self : globalThis` receiver — tests load these
   files in a bare `node:vm` context where `self` doesn't exist.
 - **Load order is the dependency graph**, set in manifest.json:
-  `slop-filters.js → slop-score.js → slop-channel.js → classifier.js`.
+  `slop-filters.js → slop-score.js → slop-channel.js → channel-match.js → classifier.js`.
   New shared code must be inserted in order there.
 - `slop-filters.js` is data-only config; `slop-score.js` is pure matcher logic.
   Don't mix the two — tuning must never require touching matcher code.

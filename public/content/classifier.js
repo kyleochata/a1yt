@@ -149,7 +149,16 @@
       ''
     ).trim();
 
-    return { id, title, channel, channelPath };
+    // Live streams, premieres, and some Shorts renderers omit this badge —
+    // durationSeconds is just null then, not an error.
+    const durationText = (
+      el.querySelector('ytd-thumbnail-overlay-time-status-renderer #text')?.textContent ??
+      el.querySelector('ytd-thumbnail-overlay-time-status-renderer')?.textContent ??
+      ''
+    ).trim();
+    const durationSeconds = durationText ? CHANNEL.parseDurationSeconds(durationText) : null;
+
+    return { id, title, channel, channelPath, durationSeconds };
   }
 
   /* ---- heuristic scoring ---- */

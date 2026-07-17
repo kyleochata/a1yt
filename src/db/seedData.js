@@ -8,6 +8,7 @@ const SAMPLE_VIDEOS = [
     tags: ['javascript', 'talks'],
     savedAt: '2026-06-02T10:15:00.000Z',
     notes: 'Best explanation of the JS event loop. Rewatch before interviews.',
+    durationSeconds: 1580,
   },
   {
     url: 'https://www.youtube.com/watch?v=fCV5oq0eLxg',
@@ -16,6 +17,7 @@ const SAMPLE_VIDEOS = [
     tags: ['homelab', 'hardware'],
     savedAt: '2026-06-10T18:30:00.000Z',
     notes: 'Parts list in the description.',
+    durationSeconds: 2415,
   },
   {
     url: 'https://www.youtube.com/watch?v=rvz9Avdq3jo',
@@ -24,6 +26,7 @@ const SAMPLE_VIDEOS = [
     tags: ['talks', 'fun'],
     savedAt: '2026-06-14T09:00:00.000Z',
     notes: '',
+    durationSeconds: 3120,
   },
   {
     url: 'https://www.youtube.com/watch?v=y8OnoxKotPQ',
@@ -32,6 +35,7 @@ const SAMPLE_VIDEOS = [
     tags: ['diy', 'science'],
     savedAt: '2026-06-21T22:45:00.000Z',
     notes: 'Ferrofluid sourcing tips around 12:30.',
+    durationSeconds: 1980,
   },
   {
     url: 'https://www.youtube.com/watch?v=zjkBMFhNj_g',
@@ -40,6 +44,7 @@ const SAMPLE_VIDEOS = [
     tags: ['ai', 'learning'],
     savedAt: '2026-06-25T14:20:00.000Z',
     notes: 'Foundation for the filtering engine work.',
+    durationSeconds: 6320,
   },
   {
     url: 'https://www.youtube.com/watch?v=Kt0HpBNOAs4',
@@ -48,6 +53,7 @@ const SAMPLE_VIDEOS = [
     tags: ['cooking'],
     savedAt: '2026-07-01T08:05:00.000Z',
     notes: 'Hydration table at 6:40.',
+    durationSeconds: 890,
   },
   {
     url: 'https://www.youtube.com/watch?v=7l6QkPDA1Yw',
@@ -56,6 +62,7 @@ const SAMPLE_VIDEOS = [
     tags: ['nature', 'short'],
     savedAt: '2026-07-05T18:00:00.000Z',
     notes: '',
+    durationSeconds: null, // demonstrates graceful degradation when duration isn't known
   },
   {
     url: 'https://www.youtube.com/watch?v=b1t41Q3xRM8',
@@ -64,6 +71,7 @@ const SAMPLE_VIDEOS = [
     tags: ['javascript', 'talks', 'performance'],
     savedAt: '2026-07-09T11:10:00.000Z',
     notes: 'Pairs well with the event loop talk.',
+    durationSeconds: 2050,
   },
 ];
 

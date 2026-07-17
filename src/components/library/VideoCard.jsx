@@ -1,3 +1,5 @@
+import { formatDuration } from '../../utils/duration.js';
+
 // Tag YouTube links with the marker the content script watches for
 // (public/content/player-settings.js) so playback preferences are applied
 // only to videos opened from the library.
@@ -37,6 +39,9 @@ export default function VideoCard({ video, onEdit, onDelete }) {
       </div>
       <div className="video-meta">
         <span className="video-channel">{video.channel}</span>
+        {formatDuration(video.durationSeconds) && (
+          <span className="video-duration">{formatDuration(video.durationSeconds)}</span>
+        )}
         <span className="video-date">saved {formatDate(video.savedAt)}</span>
       </div>
       {video.tags?.length > 0 && (
