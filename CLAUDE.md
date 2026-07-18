@@ -32,26 +32,18 @@ Trusted channels + `ytc.allowlist` are never hidden by either layer.
 ## Sync invariants — change one side, change the other
 
 - `DEFAULT_PREFERENCES` / `DEFAULT_SLOP_PREFS`: `src/storage/preferences.js` ↔
-  `public/content/classifier.js` ↔ `public/background.js` (background has no slop key; that's fine).
-  Enforced by `tests/preferences-sync.test.mjs` except classifier.js's top-level
-  defaults (closure-local; its slop values derive from slop-filters.js, which is covered)
+  `public/content/classifier.js` ↔ `public/background.js` (background has no slop key; that's fine)
 - Slop default weights/thresholds: `src/storage/preferences.js` ↔ `public/content/slop-filters.js`
 - LLM prompt: `public/background.js` `buildPrompt()` ↔ `src/llm/ollamaClient.js`
-  (enforced by `tests/prompt-sync.test.mjs`, which vm-loads background.js with a
-  minimal `chrome` stub — extend the stub if background.js gains top-level chrome
-  calls). On a material prompt change, bump `PROMPT_VERSION` in background.js so
-  cached verdicts from the old prompt are re-classified.
-- Channel matching (`normalizeChannel`/`channelMatches`): `public/content/channel-match.js`
-  ↔ `public/background.js`
 - IndexedDB names/version/upgrade: `src/db/database.js` ↔ `public/background.js`
-  (either context may run the upgrade; enforced by `tests/db-schema-sync.test.mjs`)
+  (either context may run the upgrade)
 
 ## Storage keys (chrome.storage.local)
 
 - `ytc.preferences` — mirrored **one-way** from the app page's localStorage by
   `src/storage/preferences.js`. Extension-side code must never write it (the next app
   save would clobber the write); extension-owned state gets its own key instead.
-- `ytc.allowlist` — user allowlist, owned by the content script, read by `background.js`
+- `ytc.allowlist` — user allowlist, owned by the content script
 - `ytc.channelStats`, `ytc.skeletons` — tier-4 caches (7-day TTL, size-capped)
 
 ## Conventions

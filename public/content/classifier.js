@@ -20,7 +20,6 @@
   const SLOP_CONFIG = self.YTC_SLOP_CONFIG;
   const SLOP = self.YTC_SLOP_SCORE;
   const CHANNEL = self.YTC_SLOP_CHANNEL;
-  const MATCH = self.YTC_CHANNEL_MATCH;
 
   const CONTAINER_SELECTOR = [
     'ytd-rich-item-renderer',
@@ -55,15 +54,12 @@
   };
 
   let prefs = { ...DEFAULT_PREFERENCES };
-  let allowlist = []; // lowercased channel names and/or channel paths, user-managed via placeholder button
-  let storageLoaded = false; // don't filter until prefs + allowlist have loaded
+  let allowlist = []; // lowercased channel names, user-managed via placeholder button
   const results = new Map(); // videoId -> {verdict, confidence, reason, source} (LLM layer)
   const failed = new Set(); // videoIds that errored (Ollama down etc.) — retried on navigation
   const pending = new Set(); // videoIds with an in-flight request
   const queue = []; // videos waiting for a free slot
-  const titles = new Map(); // videoId -> raw title (weight-independent scoring input)
   const titleScores = new Map(); // videoId -> {score, signals}
-  const channelStats = new Map(); // channelPath -> stats|null (weight-independent scoring input)
   const channelScores = new Map(); // channelPath -> {score, signals} | 'pending'
   const revealed = new Set(); // videoIds un-hidden via "show anyway"
 
@@ -75,10 +71,6 @@
       weights: { ...DEFAULT_SLOP_PREFS.weights, ...(stored?.slop?.weights ?? {}) },
     };
     return merged;
-  }
-
-  function sameList(a, b) {
-    return a.length === b.length && a.every((v, i) => v === b[i]);
   }
 
   /* ---- styles ---- */
@@ -119,30 +111,6 @@
     return match ? match[1] : null;
   }
 
-  const DURATION_TEXT_RE = /^\d{1,2}(?::\d{2}){1,2}$/;
-
-  // Duration badge markup varies across YouTube's renderer generations (the
-  // classic ytd-* Polymer components vs. the newer yt-lockup-view-model
-  // redesign). The last resort isn't tied to a specific class name — it
-  // scans small badge-like elements near the thumbnail for "mm:ss"-shaped
-  // text, so future markup churn degrades gracefully instead of silently
-  // going blank again.
-  function findDurationText(el) {
-    const known =
-      el.querySelector('ytd-thumbnail-overlay-time-status-renderer #text')?.textContent ??
-      el.querySelector('ytd-thumbnail-overlay-time-status-renderer')?.textContent ??
-      el.querySelector('badge-shape .badge-shape-wiz__text')?.textContent ??
-      null;
-    if (known?.trim()) return known.trim();
-
-    const thumb = el.querySelector('#thumbnail, ytd-thumbnail, yt-thumbnail-view-model') ?? el;
-    for (const node of thumb.querySelectorAll('span, div')) {
-      const text = node.textContent.trim();
-      if (DURATION_TEXT_RE.test(text)) return text;
-    }
-    return '';
-  }
-
   function extractVideo(el) {
     if (el.querySelector('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer')) return null;
 
@@ -173,12 +141,7 @@
       ''
     ).trim();
 
-    // Live streams, premieres, and some Shorts renderers omit this badge —
-    // durationSeconds is just null then, not an error.
-    const durationText = findDurationText(el);
-    const durationSeconds = durationText ? CHANNEL.parseDurationSeconds(durationText) : null;
-
-    return { id, title, channel, channelPath, durationSeconds };
+    return { id, title, channel, channelPath };
   }
 
   /* ---- heuristic scoring ---- */
@@ -194,7 +157,6 @@
   function scoreVideo(video) {
     if (!titleScores.has(video.id)) {
       const result = SLOP.scoreTitle(video.title, SLOP_CONFIG, prefs.slop.weights);
-      titles.set(video.id, video.title);
       titleScores.set(video.id, result);
       debugLog('title', video, result);
     }
@@ -202,27 +164,11 @@
       channelScores.set(video.channelPath, 'pending');
       CHANNEL.getChannelStats(video.channelPath, SLOP_CONFIG).then((stats) => {
         const result = SLOP.scoreChannelStats(stats, SLOP_CONFIG, prefs.slop.weights);
-        channelStats.set(video.channelPath, stats);
         channelScores.set(video.channelPath, result);
         debugLog('channel', video, result);
         applyAll();
       });
     }
-  }
-
-  // Weights changed: rebuild both score maps from the raw inputs we already
-  // hold. Rescoring in place (rather than clearing and waiting for the
-  // debounced scan) keeps every card's score continuous — a momentary 0 would
-  // un-hide the whole feed until the rescan landed.
-  function rescoreAll() {
-    for (const [id, title] of titles) {
-      titleScores.set(id, SLOP.scoreTitle(title, SLOP_CONFIG, prefs.slop.weights));
-    }
-    for (const [path, stats] of channelStats) {
-      channelScores.set(path, SLOP.scoreChannelStats(stats, SLOP_CONFIG, prefs.slop.weights));
-    }
-    // Channels still in flight stay 'pending'; their handler scores with the
-    // new weights when it resolves.
   }
 
   function slopScore(el) {
@@ -231,10 +177,12 @@
     return (title?.score ?? 0) + (typeof channel === 'object' && channel ? channel.score : 0);
   }
 
-  function isAllowed(channelName, channelPath) {
+  function isAllowed(channelName) {
+    const name = (channelName ?? '').trim().toLowerCase();
+    if (!name) return false;
     return (
-      allowlist.some((c) => MATCH.channelMatches(c, channelName, channelPath)) ||
-      prefs.trustedChannels.some((c) => MATCH.channelMatches(c, channelName, channelPath))
+      allowlist.includes(name) ||
+      prefs.trustedChannels.some((c) => c.trim().toLowerCase() === name)
     );
   }
 
@@ -282,19 +230,8 @@
       allow.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        // Store the channel path too: some layouts expose only the /@handle
-        // link, and a name-only entry can't match those cards.
-        const path = (el.dataset.ytcChannelPath ?? '').toLowerCase();
-        const next = [
-          ...new Set([...allowlist, channelName.toLowerCase(), ...(path ? [path] : [])]),
-        ];
-        try {
-          chrome.storage.local.set({ [ALLOWLIST_KEY]: next }); // onChanged re-applies
-        } catch {
-          // Extension reloaded from under us; this page's script is orphaned.
-          allow.textContent = 'Reload page to allowlist';
-          allow.disabled = true;
-        }
+        const next = [...new Set([...allowlist, channelName.toLowerCase()])];
+        chrome.storage.local.set({ [ALLOWLIST_KEY]: next }); // onChanged re-applies
       });
       box.appendChild(allow);
     }
@@ -308,11 +245,8 @@
     el.querySelector(':scope > .ytc-placeholder')?.remove();
     const existing = el.querySelector(':scope > .ytc-badge');
     if (existing) {
-      // Only write when the text actually changed: an unconditional write
-      // replaces the text node, which our own MutationObserver sees, which
-      // schedules another scan — a self-sustaining loop while any card is dimmed.
-      if (existing.textContent !== badgeText) existing.textContent = badgeText;
-      if (existing.title !== badgeTitle) existing.title = badgeTitle;
+      existing.textContent = badgeText;
+      existing.title = badgeTitle;
       return;
     }
     const badge = document.createElement('div');
@@ -329,19 +263,14 @@
 
   function applyVerdict(el) {
     const id = el.dataset.ytcId;
-    if (!prefs.filteringEnabled || isAllowed(el.dataset.ytcChannel, el.dataset.ytcChannelPath)) {
+    if (!prefs.filteringEnabled || isAllowed(el.dataset.ytcChannel)) {
       clearMarks(el);
       return;
     }
 
     // Layer 1: heuristic slop score.
-    // Never fully hide a card whose channel we couldn't extract: a hidden card
-    // (display:none) stops YouTube from lazily rendering its byline, so an
-    // allowlisted channel could stay hidden forever. Dimming keeps it in
-    // layout; once the byline renders, the isAllowed gate above clears it.
-    const channelKnown = Boolean(el.dataset.ytcChannel || el.dataset.ytcChannelPath);
     const score = slopScore(el);
-    if (score >= prefs.slop.hideThreshold && !revealed.has(id) && channelKnown) {
+    if (score >= prefs.slop.hideThreshold && !revealed.has(id)) {
       renderHidden(el, score);
       return;
     }
@@ -443,10 +372,7 @@
   /* ---- scanning ---- */
 
   function scan() {
-    // storageLoaded guards the startup race: the MutationObserver can fire
-    // before the allowlist/prefs arrive, and filtering against an empty
-    // allowlist would hide allowlisted channels.
-    if (!storageLoaded || !prefs.filteringEnabled) return;
+    if (!prefs.filteringEnabled) return;
     document.querySelectorAll(CONTAINER_SELECTOR).forEach((el) => {
       const video = extractVideo(el);
       if (!video) return;
@@ -455,15 +381,10 @@
       if (el.dataset.ytcId !== video.id) {
         el.dataset.ytcId = video.id;
         clearMarks(el);
-        el.dataset.ytcChannel = video.channel;
-        if (video.channelPath) el.dataset.ytcChannelPath = video.channelPath;
-        else delete el.dataset.ytcChannelPath;
-      } else {
-        // Same video: bylines render lazily, so a re-scan can extract an empty
-        // channel. Keep previously captured values instead of erasing them.
-        if (video.channel) el.dataset.ytcChannel = video.channel;
-        if (video.channelPath) el.dataset.ytcChannelPath = video.channelPath;
       }
+      el.dataset.ytcChannel = video.channel;
+      if (video.channelPath) el.dataset.ytcChannelPath = video.channelPath;
+      else delete el.dataset.ytcChannelPath;
 
       scoreVideo(video);
       applyVerdict(el);
@@ -474,7 +395,7 @@
         !results.has(video.id) &&
         !pending.has(video.id) &&
         !failed.has(video.id) &&
-        !isAllowed(el.dataset.ytcChannel, el.dataset.ytcChannelPath)
+        !isAllowed(video.channel)
       ) {
         if (!queue.some((q) => q.video.id === video.id)) queue.push({ video, el });
       }
@@ -493,7 +414,6 @@
   chrome.storage.local.get(['ytc.preferences', ALLOWLIST_KEY], (stored) => {
     prefs = mergePrefs(stored?.['ytc.preferences']);
     allowlist = stored?.[ALLOWLIST_KEY] ?? [];
-    storageLoaded = true;
     if (prefs.filteringEnabled) scan();
   });
 
@@ -504,17 +424,9 @@
       applyAll();
     }
     if (changes['ytc.preferences']) {
-      const previousKeywords = prefs.blacklistKeywords;
       prefs = mergePrefs(changes['ytc.preferences'].newValue);
-      rescoreAll(); // weights may have changed
-      // The blacklist is enforced in background.js, ahead of its cache, so a
-      // changed list only takes effect if we drop the verdicts we already hold:
-      // scan() skips any video with a result, and this map outlives SPA
-      // navigation.
-      if (!sameList(previousKeywords, prefs.blacklistKeywords)) {
-        results.clear();
-        failed.clear();
-      }
+      titleScores.clear(); // weights may have changed; rescore on next scan
+      channelScores.clear(); // stats stay cached in storage; only rescored
       applyAll(); // re-evaluate thresholds/enabled without reclassifying
       if (prefs.filteringEnabled) scheduleScan();
     }
